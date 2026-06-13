@@ -1,0 +1,1 @@
+"""Bundled COMPLAT visual assets."""

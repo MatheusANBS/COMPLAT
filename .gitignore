@@ -1,0 +1,55 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.pyo
+
+# Virtual environments
+.venv/
+venv/
+env/
+ENV/
+
+# Packaging and build output
+build/
+dist/
+*.egg-info/
+.eggs/
+*.egg
+*.spec
+
+# Test and coverage output
+.pytest_cache/
+.coverage
+.coverage.*
+htmlcov/
+.tox/
+.nox/
+
+# Type checkers and linters
+.mypy_cache/
+.pyre/
+.ruff_cache/
+.cache/
+
+# Local app/generated files
+complat_output/
+*.zip
+ui-preview*.png
+
+# Windows
+Thumbs.db
+Desktop.ini
+$RECYCLE.BIN/
+
+# Editors and IDEs
+.idea/
+.vscode/
+*.code-workspace
+
+# Environment files
+.env
+.env.*
+
+# Logs
+*.log
