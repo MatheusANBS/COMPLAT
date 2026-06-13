@@ -32,6 +32,6 @@ def build_services(recursive: bool = False) -> ApplicationServices:
         create_zip_batches=CreateZipBatchesUseCase(
             analyze_zip_plan,
             ZipArchiveWriter(),
-            max_workers=4,
+            max_workers=None,
         ),
     )

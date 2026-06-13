@@ -35,7 +35,12 @@ visual de progresso.
 - Criacao de ZIPs baseada no plano ja analisado em memoria.
 - Barra de progresso em tempo real durante a geracao.
 - Geracao fora da thread principal da interface.
-- Escrita paralela de partes independentes com compressao rapida.
+- Escrita paralela de partes independentes com workers dinamicos por CPU.
+- Cache leve para reanalises da mesma pasta/lista.
+- Planejamento otimizado com indice ordenado de espaco restante.
+- Tabelas otimizadas para listas grandes, sem auto-redimensionamento custoso.
+- Filtro rapido na aba de resultado atual.
+- Exportacao CSV das linhas visiveis em `Plan`, `Found` e `Not found`.
 - Limite padrao de `9 MB` por ZIP.
 - Entrada com nome simples ou `codigo + nome`.
 - Busca usa apenas o nome, mas preserva codigo e nome nos resultados.
@@ -55,8 +60,9 @@ flowchart TD
     Inputs --> Analyze["AnalyzeZipPlanUseCase"]
     Analyze --> Parser["Normalizacao<br/>codigo + nome"]
     Parser --> Finder["LocalFileFinder<br/>os.scandir"]
-    Finder --> Matcher["FileNameMatcher<br/>filename/stem"]
-    Matcher --> Planner["ZipPlanner<br/>best-fit decreasing"]
+    Finder --> Cache["Cache de busca<br/>pasta + nomes"]
+    Cache --> Matcher["FileNameMatcher<br/>filename/stem"]
+    Matcher --> Planner["ZipPlanner<br/>best-fit + indice ordenado"]
     Planner --> Plan["Plano de ZIPs"]
 
     Plan --> Tabs["Plan / Found / Not found / Heuristic"]
@@ -140,6 +146,10 @@ complat-ui
 7. Revise as abas `Plan`, `Found`, `Not found` e `Heuristic`.
 8. Clique em `Create zips`.
 
+Use o campo `Filter current result tab` para filtrar a aba aberta. Nas tabelas
+de resultado, clique com o botao direito para copiar a celula selecionada ou
+exportar as linhas visiveis para `.csv`.
+
 Os arquivos gerados seguem o formato:
 
 ```text
@@ -195,15 +205,18 @@ Linhas duplicadas sao ignoradas depois da normalizacao.
 
 ## Planejamento Dos ZIPs
 
-O planner usa a heuristica `best-fit decreasing`:
+O planner usa a heuristica `best-fit decreasing` com indice ordenado de sobra:
 
 1. Ordena os arquivos encontrados do maior para o menor.
-2. Tenta encaixar cada arquivo no lote com menor sobra possivel.
-3. Cria um novo lote quando nenhum lote existente comporta o arquivo.
-4. Mostra o plano na aba `Plan`.
-5. Durante a criacao, mede o tamanho real final de cada `.zip`.
+2. Mantem uma lista ordenada com o espaco restante de cada lote.
+3. Encontra rapidamente o lote com menor sobra possivel que ainda comporta o arquivo.
+4. Cria um novo lote quando nenhum lote existente comporta o arquivo.
+5. Mostra o plano na aba `Plan`.
+6. Durante a criacao, mede o tamanho real final de cada `.zip`.
 
 Essa estrategia e rapida, previsivel e evita carregar ZIPs inteiros em memoria.
+A busca local tambem usa cache por pasta, modo recursivo e conjunto de nomes,
+deixando reanalises iguais praticamente imediatas.
 
 ## CLI
 

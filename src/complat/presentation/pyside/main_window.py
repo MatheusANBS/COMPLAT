@@ -1,9 +1,10 @@
 from __future__ import annotations
 
+import csv
 from pathlib import Path
 
 from PySide6.QtCore import QEasingCurve, QPropertyAnimation, QThread, Qt
-from PySide6.QtGui import QGuiApplication, QIcon, QPixmap
+from PySide6.QtGui import QAction, QGuiApplication, QIcon, QPixmap
 from PySide6.QtWidgets import (
     QCheckBox,
     QFileDialog,
@@ -14,6 +15,7 @@ from PySide6.QtWidgets import (
     QLabel,
     QLineEdit,
     QMainWindow,
+    QMenu,
     QMessageBox,
     QPushButton,
     QPlainTextEdit,
@@ -115,6 +117,10 @@ class MainWindow(QMainWindow):
         self.missing_table = self._create_table(["Code", "Name"])
         self.heuristic_output = QPlainTextEdit()
         self.heuristic_output.setReadOnly(True)
+        self.filter_input = QLineEdit()
+        self.filter_input.setPlaceholderText("Filter current result tab")
+        self.filter_input.setClearButtonEnabled(True)
+        self.filter_input.setObjectName("filterInput")
 
         root_layout = QVBoxLayout()
         root_layout.setContentsMargins(16, 16, 16, 12)
@@ -130,6 +136,7 @@ class MainWindow(QMainWindow):
         self.setCentralWidget(container)
         self.statusBar().showMessage("Ready")
         self._apply_styles()
+        self._configure_table_columns()
 
     def _build_header(self) -> QWidget:
         panel = QWidget()
@@ -234,16 +241,25 @@ class MainWindow(QMainWindow):
         names_layout.addLayout(names_actions)
         names_panel.setLayout(names_layout)
 
-        tabs = QTabWidget()
-        tabs.setObjectName("resultTabs")
-        tabs.addTab(self.plan_table, "Plan")
-        tabs.addTab(self.found_table, "Found")
-        tabs.addTab(self.missing_table, "Not found")
-        tabs.addTab(self.heuristic_output, "Heuristic")
+        self.result_tabs = QTabWidget()
+        self.result_tabs.setObjectName("resultTabs")
+        self.result_tabs.addTab(self.plan_table, "Plan")
+        self.result_tabs.addTab(self.found_table, "Found")
+        self.result_tabs.addTab(self.missing_table, "Not found")
+        self.result_tabs.addTab(self.heuristic_output, "Heuristic")
+
+        results_panel = QWidget()
+        results_panel.setObjectName("resultsPanel")
+        results_layout = QVBoxLayout()
+        results_layout.setContentsMargins(0, 0, 0, 0)
+        results_layout.setSpacing(8)
+        results_layout.addWidget(self.filter_input)
+        results_layout.addWidget(self.result_tabs, stretch=1)
+        results_panel.setLayout(results_layout)
 
         splitter = QSplitter(Qt.Horizontal)
         splitter.addWidget(names_panel)
-        splitter.addWidget(tabs)
+        splitter.addWidget(results_panel)
         splitter.setSizes([340, 900])
         splitter.setStretchFactor(0, 1)
         splitter.setStretchFactor(1, 4)
@@ -260,8 +276,26 @@ class MainWindow(QMainWindow):
         table.verticalHeader().setVisible(False)
         table.horizontalHeader().setStretchLastSection(True)
         table.horizontalHeader().setSectionResizeMode(QHeaderView.Interactive)
+        table.horizontalHeader().setDefaultSectionSize(150)
+        table.setContextMenuPolicy(Qt.CustomContextMenu)
+        table.customContextMenuRequested.connect(
+            lambda position, current_table=table: self._show_table_menu(current_table, position)
+        )
         table.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
         return table
+
+    def _configure_table_columns(self) -> None:
+        self.plan_table.setColumnWidth(0, 110)
+        self.plan_table.setColumnWidth(1, 80)
+        self.plan_table.setColumnWidth(2, 120)
+        self.plan_table.setColumnWidth(3, 120)
+        self.plan_table.setColumnWidth(4, 120)
+
+        self.found_table.setColumnWidth(0, 220)
+        self.found_table.setColumnWidth(1, 240)
+        self.found_table.setColumnWidth(2, 110)
+
+        self.missing_table.setColumnWidth(0, 140)
 
     def _connect_signals(self) -> None:
         self.source_button.clicked.connect(self._choose_source_folder)
@@ -276,6 +310,8 @@ class MainWindow(QMainWindow):
         self.source_input.textChanged.connect(self._invalidate_analysis)
         self.max_size_input.valueChanged.connect(self._invalidate_analysis)
         self.missing_table.itemClicked.connect(self._copy_missing_name)
+        self.filter_input.textChanged.connect(self._apply_table_filter)
+        self.result_tabs.currentChanged.connect(self._apply_table_filter)
 
     def _choose_source_folder(self) -> None:
         folder = QFileDialog.getExistingDirectory(self, "Choose source folder")
@@ -456,9 +492,9 @@ class MainWindow(QMainWindow):
             for column, value in enumerate(values):
                 self.plan_table.setItem(row, column, QTableWidgetItem(value))
 
-        self.plan_table.resizeColumnsToContents()
         self.plan_table.horizontalHeader().setStretchLastSection(True)
         self.plan_table.setSortingEnabled(True)
+        self._apply_table_filter()
 
     def _render_found(self, matched: MatchedFiles) -> None:
         self.found_table.setSortingEnabled(False)
@@ -469,9 +505,9 @@ class MainWindow(QMainWindow):
             for column, value in enumerate(values):
                 self.found_table.setItem(row, column, QTableWidgetItem(value))
 
-        self.found_table.resizeColumnsToContents()
         self.found_table.horizontalHeader().setStretchLastSection(True)
         self.found_table.setSortingEnabled(True)
+        self._apply_table_filter()
 
     def _render_missing(self, missing_names: tuple[str, ...]) -> None:
         self.missing_table.setSortingEnabled(False)
@@ -482,9 +518,9 @@ class MainWindow(QMainWindow):
             self.missing_table.setItem(row, 0, QTableWidgetItem(code))
             self.missing_table.setItem(row, 1, QTableWidgetItem(person_name))
 
-        self.missing_table.resizeColumnsToContents()
         self.missing_table.horizontalHeader().setStretchLastSection(True)
         self.missing_table.setSortingEnabled(True)
+        self._apply_table_filter()
 
     def _split_display_name(self, value: str) -> tuple[str, str]:
         requested_name = self._name_normalizer.parse_requested_name(value)
@@ -515,6 +551,87 @@ class MainWindow(QMainWindow):
 
     def _hide_copy_feedback(self) -> None:
         self.copy_feedback_label.setVisible(False)
+
+    def _current_table(self) -> QTableWidget | None:
+        widget = self.result_tabs.currentWidget()
+        if isinstance(widget, QTableWidget):
+            return widget
+        return None
+
+    def _apply_table_filter(self, *_args) -> None:
+        table = self._current_table()
+        if table is None:
+            return
+
+        query = self.filter_input.text().strip().casefold()
+        for row in range(table.rowCount()):
+            if not query:
+                table.setRowHidden(row, False)
+                continue
+
+            row_text = " ".join(
+                table.item(row, column).text().casefold()
+                for column in range(table.columnCount())
+                if table.item(row, column) is not None
+            )
+            table.setRowHidden(row, query not in row_text)
+
+    def _show_table_menu(self, table: QTableWidget, position) -> None:
+        menu = QMenu(self)
+        copy_action = QAction("Copy selected cell", self)
+        export_action = QAction("Export visible rows to CSV", self)
+        copy_action.triggered.connect(lambda: self._copy_selected_cell(table))
+        export_action.triggered.connect(lambda: self._choose_table_export_path(table))
+        menu.addAction(copy_action)
+        menu.addAction(export_action)
+        menu.exec(table.viewport().mapToGlobal(position))
+
+    def _copy_selected_cell(self, table: QTableWidget) -> None:
+        item = table.currentItem()
+        if item is None or not item.text().strip():
+            return
+
+        QGuiApplication.clipboard().setText(item.text())
+        self.copy_feedback_label.setText("✓ Copied")
+        self.copy_feedback_label.setVisible(True)
+        self._copy_feedback_animation.stop()
+        self._copy_feedback_effect.setOpacity(1.0)
+        self._copy_feedback_animation.setStartValue(1.0)
+        self._copy_feedback_animation.setEndValue(0.0)
+        self._copy_feedback_animation.start()
+
+    def _choose_table_export_path(self, table: QTableWidget) -> None:
+        path, _filter = QFileDialog.getSaveFileName(
+            self,
+            "Export visible rows",
+            "complat-results.csv",
+            "CSV files (*.csv)",
+        )
+        if not path:
+            return
+
+        self._export_table_csv(table, Path(path))
+        self.statusBar().showMessage(f"Exported: {path}")
+
+    def _export_table_csv(self, table: QTableWidget, path: Path) -> None:
+        headers = [
+            table.horizontalHeaderItem(column).text()
+            for column in range(table.columnCount())
+        ]
+        with path.open("w", newline="", encoding="utf-8-sig") as file:
+            writer = csv.writer(file)
+            writer.writerow(headers)
+            for row in range(table.rowCount()):
+                if table.isRowHidden(row):
+                    continue
+                writer.writerow(
+                    [
+                        table.item(row, column).text()
+                        if table.item(row, column) is not None
+                        else ""
+                        for column in range(table.columnCount())
+                    ]
+                )
 
     def _render_heuristic(
         self,
@@ -623,7 +740,7 @@ class MainWindow(QMainWindow):
 
     def _set_busy(self, busy: bool, message: str = "") -> None:
         self.analyze_button.setEnabled(not busy)
-        self.create_button.setEnabled(not busy)
+        self.create_button.setEnabled(not busy and self._last_analysis is not None)
         self.statusBar().showMessage(message if busy else "Ready")
         if busy:
             QGuiApplication.setOverrideCursor(Qt.WaitCursor)
@@ -660,6 +777,9 @@ class MainWindow(QMainWindow):
                 background: #111827;
                 border: 1px solid #253044;
                 border-radius: 8px;
+            }
+            QWidget#resultsPanel {
+                background: transparent;
             }
             QLabel {
                 background: transparent;
@@ -709,7 +829,12 @@ class MainWindow(QMainWindow):
                 min-height: 10px;
             }
             QProgressBar::chunk {
-                background: #3b82f6;
+                background: qlineargradient(
+                    x1:0, y1:0, x2:1, y2:0,
+                    stop:0 #22c55e,
+                    stop:0.55 #3b82f6,
+                    stop:1 #60a5fa
+                );
                 border-radius: 5px;
             }
             QLineEdit, QPlainTextEdit, QSpinBox, QTableWidget {
@@ -723,6 +848,10 @@ class MainWindow(QMainWindow):
             }
             QLineEdit:focus, QPlainTextEdit:focus, QSpinBox:focus, QTableWidget:focus {
                 border: 1px solid #3b82f6;
+            }
+            QLineEdit#filterInput {
+                min-height: 30px;
+                padding-left: 10px;
             }
             QCheckBox {
                 background: transparent;
@@ -765,6 +894,13 @@ class MainWindow(QMainWindow):
             }
             QTableWidget::item {
                 padding: 4px;
+            }
+            QTableWidget::item:hover {
+                background: #172554;
+            }
+            QTableWidget::item:selected {
+                background: #1d4ed8;
+                color: #ffffff;
             }
             QHeaderView::section {
                 background: #1e293b;

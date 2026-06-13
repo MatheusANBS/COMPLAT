@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from bisect import bisect_left, insort
+
 from .entities import FileCandidate, MatchedFiles, RequestedName, ZipBatch, ZipPlan
 
 
@@ -109,6 +111,7 @@ class ZipPlanner:
         sorted_files = sorted(files, key=lambda file: file.size_bytes, reverse=True)
         batches: list[list[FileCandidate]] = []
         batch_sizes: list[int] = []
+        remaining_by_batch: list[tuple[int, int]] = []
 
         for file in sorted_files:
             if file.size_bytes > max_size_bytes:
@@ -116,15 +119,21 @@ class ZipPlanner:
                 batch_sizes.append(file.size_bytes)
                 continue
 
-            best_index = self._find_best_fit(batch_sizes, file.size_bytes, max_size_bytes)
+            position = bisect_left(remaining_by_batch, (file.size_bytes, -1))
 
-            if best_index is None:
+            if position == len(remaining_by_batch):
                 batches.append([file])
                 batch_sizes.append(file.size_bytes)
+                insort(
+                    remaining_by_batch,
+                    (max_size_bytes - file.size_bytes, len(batches) - 1),
+                )
                 continue
 
-            batches[best_index].append(file)
-            batch_sizes[best_index] += file.size_bytes
+            remaining, batch_index = remaining_by_batch.pop(position)
+            batches[batch_index].append(file)
+            batch_sizes[batch_index] += file.size_bytes
+            insort(remaining_by_batch, (remaining - file.size_bytes, batch_index))
 
         zip_batches = tuple(
             ZipBatch(
@@ -139,26 +148,8 @@ class ZipPlanner:
             batches=zip_batches,
             max_size_bytes=max_size_bytes,
             heuristic=(
-                "Best-fit decreasing by source size. Files are sorted largest first "
-                "and each file is placed in the tightest batch that still fits."
+                "Best-fit decreasing by source size with an ordered remaining-space "
+                "index. Files are sorted largest first and each file is placed in "
+                "the tightest batch that still fits without scanning every batch."
             ),
         )
-
-    def _find_best_fit(
-        self,
-        batch_sizes: list[int],
-        file_size: int,
-        max_size_bytes: int,
-    ) -> int | None:
-        best_index = None
-        best_remaining = max_size_bytes + 1
-
-        for index, batch_size in enumerate(batch_sizes):
-            remaining = max_size_bytes - batch_size - file_size
-            if remaining < 0 or remaining >= best_remaining:
-                continue
-
-            best_index = index
-            best_remaining = remaining
-
-        return best_index

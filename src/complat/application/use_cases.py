@@ -170,6 +170,6 @@ class CreateZipBatchesUseCase:
     def _worker_count(self, total_batches: int) -> int:
         configured = self._max_workers
         if configured is None:
-            configured = min(4, max(1, (cpu_count() or 2) // 2))
+            configured = min(8, max(1, cpu_count() or 2))
 
         return max(1, min(total_batches, configured))
