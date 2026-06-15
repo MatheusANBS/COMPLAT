@@ -377,7 +377,3 @@ Possiveis evolucoes:
 - Adicionar tela de historico de geracoes.
 - Criar instalador Windows.
 - Adicionar screenshots oficiais no README.
-
-## Licenca
-
-Adicione uma licenca antes de distribuir este projeto publicamente.
