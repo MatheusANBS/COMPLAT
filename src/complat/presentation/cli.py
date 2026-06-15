@@ -20,6 +20,7 @@ def main() -> None:
     services = build_services(
         recursive=args.recursive,
         compression_mode=args.compression,
+        scan_mode=args.match_type,
     )
 
     try:
@@ -65,6 +66,12 @@ def _parse_args() -> argparse.Namespace:
         default="fast",
         help="Compression mode used when creating zip parts.",
     )
+    parser.add_argument(
+        "--match-type",
+        choices=("files", "folders", "both"),
+        default="files",
+        help="Choose whether pasted names match files, folders, or both.",
+    )
 
     return parser.parse_args()
 
@@ -78,7 +85,7 @@ def _read_names(args: argparse.Namespace) -> list[str]:
 
 
 def _print_analysis(analysis) -> None:
-    print(f"Matched files: {len(analysis.matched.files)}")
+    print(f"Matched items: {len(analysis.matched.files)}")
     print(f"Missing names: {len(analysis.matched.missing_names)}")
     print(f"Planned zip parts: {len(analysis.plan.batches)}")
     print(f"Source size: {_format_bytes(analysis.total_size_bytes)}")
@@ -91,7 +98,7 @@ def _print_analysis(analysis) -> None:
     print("Plan:")
     for batch in analysis.plan.batches:
         print(
-            f"- part {batch.number:03d}: {batch.file_count} file(s), {_format_bytes(batch.total_size_bytes)} estimated"
+            f"- part {batch.number:03d}: {batch.file_count} item(s), {_format_bytes(batch.total_size_bytes)} estimated"
         )
 
 

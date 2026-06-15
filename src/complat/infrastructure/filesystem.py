@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from enum import StrEnum
 import os
 from pathlib import Path
 
@@ -10,10 +11,15 @@ from complat.domain.entities import FileCandidate
 class LocalFileFinder:
     _MAX_CACHE_ITEMS = 8
 
-    def __init__(self, recursive: bool = False) -> None:
+    def __init__(
+        self,
+        recursive: bool = False,
+        scan_mode: ScanMode | str = "files",
+    ) -> None:
         self._recursive = recursive
-        self._index_cache: dict[tuple[str, bool], dict[str, tuple[Path, ...]]] = {}
-        self._cache_order: list[tuple[str, bool]] = []
+        self._scan_mode = ScanMode.from_value(scan_mode)
+        self._index_cache: dict[tuple[str, bool, ScanMode], dict[str, tuple[Path, ...]]] = {}
+        self._cache_order: list[tuple[str, bool, ScanMode]] = []
 
     def find(
         self,
@@ -41,11 +47,18 @@ class LocalFileFinder:
                     continue
 
                 try:
-                    size_bytes = path.stat().st_size
+                    is_directory = path.is_dir()
+                    size_bytes = self._directory_size(path, cancellation_token) if is_directory else path.stat().st_size
                 except FileNotFoundError:
                     continue
 
-                files.append(FileCandidate(path=path, size_bytes=size_bytes))
+                files.append(
+                    FileCandidate(
+                        path=path,
+                        size_bytes=size_bytes,
+                        is_directory=is_directory,
+                    )
+                )
                 seen_paths.add(path)
 
         return tuple(sorted(files, key=lambda file: file.filename.casefold()))
@@ -56,7 +69,7 @@ class LocalFileFinder:
 
     def _remember(
         self,
-        key: tuple[str, bool],
+        key: tuple[str, bool, ScanMode],
         value: dict[str, tuple[Path, ...]],
     ) -> None:
         self._index_cache[key] = value
@@ -71,7 +84,7 @@ class LocalFileFinder:
         folder: Path,
         cancellation_token: CancellationToken | None = None,
     ) -> dict[str, tuple[Path, ...]]:
-        cache_key = (str(folder.resolve()), self._recursive)
+        cache_key = (str(folder.resolve()), self._recursive, self._scan_mode)
         cached = self._index_cache.get(cache_key)
         if cached is not None:
             return cached
@@ -100,7 +113,61 @@ class LocalFileFinder:
             current = stack.pop()
             with os.scandir(current) as entries:
                 for entry in entries:
-                    if entry.is_file():
+                    if entry.is_file() and self._scan_mode.includes_files:
                         yield entry
-                    elif self._recursive and entry.is_dir():
+                    elif entry.is_dir():
+                        if self._scan_mode.includes_folders:
+                            yield entry
+                        if self._recursive:
+                            stack.append(Path(entry.path))
+
+    def _directory_size(
+        self,
+        folder: Path,
+        cancellation_token: CancellationToken | None = None,
+    ) -> int:
+        total_size = 0
+        stack = [folder]
+
+        while stack:
+            if cancellation_token:
+                cancellation_token.raise_if_cancelled()
+
+            current = stack.pop()
+            with os.scandir(current) as entries:
+                for entry in entries:
+                    if cancellation_token:
+                        cancellation_token.raise_if_cancelled()
+
+                    if entry.is_file():
+                        total_size += entry.stat().st_size
+                    elif entry.is_dir():
                         stack.append(Path(entry.path))
+
+        return total_size
+
+
+class ScanMode(StrEnum):
+    FILES = "files"
+    FOLDERS = "folders"
+    BOTH = "both"
+
+    @classmethod
+    def from_value(cls, value: ScanMode | str) -> ScanMode:
+        if isinstance(value, cls):
+            return value
+
+        normalized = value.strip().casefold()
+        for mode in cls:
+            if mode.value == normalized:
+                return mode
+
+        raise ValueError(f"Unknown scan mode: {value}")
+
+    @property
+    def includes_files(self) -> bool:
+        return self in (ScanMode.FILES, ScanMode.BOTH)
+
+    @property
+    def includes_folders(self) -> bool:
+        return self in (ScanMode.FOLDERS, ScanMode.BOTH)

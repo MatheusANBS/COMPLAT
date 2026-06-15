@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from collections.abc import Callable
 from enum import StrEnum
+import os
 from pathlib import Path
 from zipfile import ZIP_DEFLATED, ZIP_STORED, ZipFile, ZipInfo
 
@@ -54,12 +55,10 @@ class ZipArchiveWriter:
                     if cancellation_token:
                         cancellation_token.raise_if_cancelled()
 
-                    zip_info = ZipInfo.from_file(file.path, arcname)
-                    zip_info.compress_type = self._compression_for(file)
-                    self._write_file(
+                    self._write_candidate(
                         archive=archive,
-                        file=file,
-                        zip_info=zip_info,
+                        candidate=file,
+                        arcname=arcname,
                         batch_number=batch.number,
                         progress_callback=progress_callback,
                         cancellation_token=cancellation_token,
@@ -82,14 +81,14 @@ class ZipArchiveWriter:
     def _write_file(
         self,
         archive: ZipFile,
-        file: FileCandidate,
+        path: Path,
         zip_info: ZipInfo,
         batch_number: int,
         progress_callback: Callable[[int, str], None] | None,
         cancellation_token: CancellationToken | None,
     ) -> None:
-        message = f"Writing part {batch_number:03d}: {file.filename}"
-        with file.path.open("rb") as source, archive.open(zip_info, "w") as target:
+        message = f"Writing part {batch_number:03d}: {path.name}"
+        with path.open("rb") as source, archive.open(zip_info, "w") as target:
             while True:
                 if cancellation_token:
                     cancellation_token.raise_if_cancelled()
@@ -101,6 +100,80 @@ class ZipArchiveWriter:
                 target.write(chunk)
                 if progress_callback:
                     progress_callback(len(chunk), message)
+
+    def _write_candidate(
+        self,
+        archive: ZipFile,
+        candidate: FileCandidate,
+        arcname: str,
+        batch_number: int,
+        progress_callback: Callable[[int, str], None] | None,
+        cancellation_token: CancellationToken | None,
+    ) -> None:
+        if not candidate.is_directory:
+            zip_info = ZipInfo.from_file(candidate.path, arcname)
+            zip_info.compress_type = self._compression_for(candidate.path)
+            self._write_file(
+                archive=archive,
+                path=candidate.path,
+                zip_info=zip_info,
+                batch_number=batch_number,
+                progress_callback=progress_callback,
+                cancellation_token=cancellation_token,
+            )
+            return
+
+        wrote_anything = False
+        for path in self._iter_directory_paths(candidate.path, cancellation_token):
+            wrote_anything = True
+            relative = path.relative_to(candidate.path).as_posix()
+            child_arcname = f"{arcname}/{relative}"
+            if path.is_dir():
+                archive.writestr(self._directory_zip_info(path, child_arcname), b"")
+                continue
+
+            zip_info = ZipInfo.from_file(path, child_arcname)
+            zip_info.compress_type = self._compression_for(path)
+            self._write_file(
+                archive=archive,
+                path=path,
+                zip_info=zip_info,
+                batch_number=batch_number,
+                progress_callback=progress_callback,
+                cancellation_token=cancellation_token,
+            )
+
+        if not wrote_anything:
+            archive.writestr(self._directory_zip_info(candidate.path, arcname), b"")
+
+    def _iter_directory_paths(
+        self,
+        folder: Path,
+        cancellation_token: CancellationToken | None,
+    ):
+        stack = [folder]
+
+        while stack:
+            if cancellation_token:
+                cancellation_token.raise_if_cancelled()
+
+            current = stack.pop()
+            with os.scandir(current) as entries:
+                child_paths = [Path(entry.path) for entry in entries]
+
+            for path in sorted(child_paths, key=lambda item: item.name.casefold()):
+                if cancellation_token:
+                    cancellation_token.raise_if_cancelled()
+
+                yield path
+                if path.is_dir():
+                    stack.append(path)
+
+    def _directory_zip_info(self, path: Path, arcname: str) -> ZipInfo:
+        directory_name = arcname.rstrip("/") + "/"
+        zip_info = ZipInfo.from_file(path, directory_name)
+        zip_info.compress_type = ZIP_STORED
+        return zip_info
 
     def _unique_archive_names(
         self,
@@ -121,8 +194,8 @@ class ZipArchiveWriter:
 
         return tuple(names)
 
-    def _compression_for(self, file: FileCandidate) -> int:
-        if self._compression_mode == CompressionMode.FAST and file.path.suffix.casefold() in self._STORED_EXTENSIONS:
+    def _compression_for(self, path: Path) -> int:
+        if self._compression_mode == CompressionMode.FAST and path.suffix.casefold() in self._STORED_EXTENSIONS:
             return ZIP_STORED
 
         return ZIP_DEFLATED

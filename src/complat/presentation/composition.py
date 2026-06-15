@@ -8,7 +8,7 @@ from complat.application.use_cases import (
     CreateZipBatchesUseCase,
 )
 from complat.domain.services import FileNameMatcher, NameNormalizer, ZipPlanner
-from complat.infrastructure.filesystem import LocalFileFinder
+from complat.infrastructure.filesystem import LocalFileFinder, ScanMode
 from complat.infrastructure.zip_writer import CompressionMode, ZipArchiveWriter
 
 
@@ -22,8 +22,9 @@ class ApplicationServices:
 def build_services(
     recursive: bool = False,
     compression_mode: CompressionMode | str = "fast",
+    scan_mode: ScanMode | str = "files",
 ) -> ApplicationServices:
-    file_finder = LocalFileFinder(recursive=recursive)
+    file_finder = LocalFileFinder(recursive=recursive, scan_mode=scan_mode)
     normalizer = NameNormalizer()
     matcher = FileNameMatcher(normalizer)
     compare_names = CompareNamesUseCase(file_finder, matcher, normalizer)

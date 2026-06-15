@@ -8,6 +8,7 @@ from pathlib import Path
 class FileCandidate:
     path: Path
     size_bytes: int
+    is_directory: bool = False
 
     @property
     def filename(self) -> str:
@@ -16,6 +17,10 @@ class FileCandidate:
     @property
     def stem(self) -> str:
         return self.path.stem
+
+    @property
+    def kind(self) -> str:
+        return "Folder" if self.is_directory else "File"
 
 
 @dataclass(frozen=True)

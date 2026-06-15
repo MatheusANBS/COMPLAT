@@ -70,6 +70,7 @@ class MainWindow(QMainWindow):
             build_services(
                 recursive=self.recursive_input.isChecked(),
                 compression_mode=self._compression_mode(),
+                scan_mode=self._scan_mode(),
             )
         )
         self._connect_signals()
@@ -90,6 +91,10 @@ class MainWindow(QMainWindow):
         self.max_size_input.setFixedWidth(120)
 
         self.recursive_input = QCheckBox("Include subfolders")
+        self.scan_mode_input = QComboBox()
+        self.scan_mode_input.addItem("Files", "files")
+        self.scan_mode_input.addItem("Folders", "folders")
+        self.scan_mode_input.addItem("Files and folders", "both")
         self.compression_input = QComboBox()
         self.compression_input.addItem("Fast", "fast")
         self.compression_input.addItem("Balanced", "balanced")
@@ -143,7 +148,7 @@ class MainWindow(QMainWindow):
             self.found_table,
             self.found_model,
             self.found_proxy,
-        ) = self._create_table(["Name", "File", "Size", "Path"])
+        ) = self._create_table(["Name", "Type", "File/Folder", "Size", "Path"])
         (
             self.missing_table,
             self.missing_model,
@@ -227,8 +232,10 @@ class MainWindow(QMainWindow):
         form.addWidget(QLabel("Limit"), 2, 0)
         form.addWidget(self.max_size_input, 2, 1, alignment=Qt.AlignLeft)
         form.addWidget(self.recursive_input, 2, 2, alignment=Qt.AlignLeft)
-        form.addWidget(QLabel("Compression"), 3, 0)
-        form.addWidget(self.compression_input, 3, 1, alignment=Qt.AlignLeft)
+        form.addWidget(QLabel("Match"), 3, 0)
+        form.addWidget(self.scan_mode_input, 3, 1, alignment=Qt.AlignLeft)
+        form.addWidget(QLabel("Compression"), 4, 0)
+        form.addWidget(self.compression_input, 4, 1, alignment=Qt.AlignLeft)
 
         panel.setLayout(form)
         return panel
@@ -339,8 +346,9 @@ class MainWindow(QMainWindow):
         self.plan_table.setColumnWidth(4, 120)
 
         self.found_table.setColumnWidth(0, 220)
-        self.found_table.setColumnWidth(1, 240)
-        self.found_table.setColumnWidth(2, 110)
+        self.found_table.setColumnWidth(1, 90)
+        self.found_table.setColumnWidth(2, 240)
+        self.found_table.setColumnWidth(3, 110)
 
         self.missing_table.setColumnWidth(0, 140)
 
@@ -353,6 +361,7 @@ class MainWindow(QMainWindow):
         self.create_button.clicked.connect(self._create_zips)
         self.cancel_button.clicked.connect(self._cancel_current_operation)
         self.recursive_input.stateChanged.connect(self._rebuild_controller)
+        self.scan_mode_input.currentTextChanged.connect(self._rebuild_controller)
         self.compression_input.currentTextChanged.connect(self._rebuild_controller_for_compression)
         self.names_input.textChanged.connect(self._update_requested_count)
         self.names_input.textChanged.connect(self._invalidate_analysis)
@@ -599,7 +608,16 @@ class MainWindow(QMainWindow):
         self._apply_table_filter()
 
     def _render_found(self, matched: MatchedFiles) -> None:
-        rows = [(file.stem, file.filename, _format_bytes(file.size_bytes), str(file.path)) for file in matched.files]
+        rows = [
+            (
+                file.filename if file.is_directory else file.stem,
+                file.kind,
+                file.filename,
+                _format_bytes(file.size_bytes),
+                str(file.path),
+            )
+            for file in matched.files
+        ]
 
         self.found_model.replace_rows(rows)
         self.found_table.horizontalHeader().setStretchLastSection(True)
@@ -833,6 +851,7 @@ class MainWindow(QMainWindow):
         services = build_services(
             recursive=self.recursive_input.isChecked(),
             compression_mode=self._compression_mode(),
+            scan_mode=self._scan_mode(),
         )
         self._controller = CompactFilesController(services)
         self._invalidate_analysis()
@@ -842,6 +861,7 @@ class MainWindow(QMainWindow):
         services = build_services(
             recursive=self.recursive_input.isChecked(),
             compression_mode=self._compression_mode(),
+            scan_mode=self._scan_mode(),
         )
         self._controller = CompactFilesController(services)
         self.statusBar().showMessage("Compression mode updated")
@@ -858,11 +878,19 @@ class MainWindow(QMainWindow):
     def _compression_mode(self) -> str:
         return str(self.compression_input.currentData() or "fast")
 
+    def _scan_mode(self) -> str:
+        return str(self.scan_mode_input.currentData() or "files")
+
     def _load_settings(self) -> None:
         self.source_input.setText(str(self._settings.value("paths/source", "")))
         self.output_input.setText(str(self._settings.value("paths/output", "")))
         self.max_size_input.setValue(int(self._settings.value("zip/max_size_mb", DEFAULT_LIMIT_MB)))
         self.recursive_input.setChecked(bool(self._settings.value("search/recursive", False, type=bool)))
+
+        scan_mode = str(self._settings.value("search/scan_mode", "files"))
+        scan_mode_index = self.scan_mode_input.findData(scan_mode)
+        if scan_mode_index >= 0:
+            self.scan_mode_input.setCurrentIndex(scan_mode_index)
 
         compression_mode = str(self._settings.value("zip/compression", "fast"))
         compression_index = self.compression_input.findData(compression_mode)
@@ -883,6 +911,7 @@ class MainWindow(QMainWindow):
         self._settings.setValue("zip/max_size_mb", self.max_size_input.value())
         self._settings.setValue("zip/compression", self._compression_mode())
         self._settings.setValue("search/recursive", self.recursive_input.isChecked())
+        self._settings.setValue("search/scan_mode", self._scan_mode())
         self._settings.setValue("window/geometry", self.saveGeometry())
         self._settings.setValue("window/splitter", self.workspace_splitter.saveState())
 
@@ -911,6 +940,7 @@ class MainWindow(QMainWindow):
         self.names_input.setEnabled(not creating)
         self.max_size_input.setEnabled(not creating)
         self.recursive_input.setEnabled(not creating)
+        self.scan_mode_input.setEnabled(not creating)
         self.compression_input.setEnabled(not creating)
         if creating:
             self.progress_bar.setValue(0)

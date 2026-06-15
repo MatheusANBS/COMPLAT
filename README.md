@@ -16,8 +16,8 @@
   <img alt="ZIP" src="https://img.shields.io/badge/Output-ZIP%20Parts-2563EB?style=flat-square">
 </p>
 
-COMPLAT e uma ferramenta local para analisar uma pasta, comparar os arquivos
-existentes com uma lista de pessoas/nomes e gerar multiplos arquivos `.zip`
+COMPLAT e uma ferramenta local para analisar uma pasta, comparar arquivos ou
+pastas existentes com uma lista de pessoas/nomes e gerar multiplos arquivos `.zip`
 respeitando um limite configurado por parte. O caso principal e receber uma
 lista colada do Excel ou de outro sistema, selecionar a pasta de origem,
 verificar encontrados/nao encontrados e empacotar tudo em ZIPs menores.
@@ -32,6 +32,7 @@ visual de progresso.
 - UI desktop em PySide6 com tema dark, moderno e minimalista.
 - Icone e identidade visual embutidos no aplicativo.
 - Fluxo em duas etapas: `Analyze plan` e depois `Create zips`.
+- Busca por arquivos, pastas ou ambos.
 - Criacao de ZIPs baseada no plano ja analisado em memoria.
 - Barra de progresso em tempo real por bytes escritos durante a geracao.
 - Geracao fora da thread principal da interface.
@@ -142,9 +143,10 @@ complat-ui
 3. Selecione a pasta de saida em `Output`.
 4. Cole a lista no painel `Names`.
 5. Confira o limite, por padrao `9 MB`.
-6. Clique em `Analyze plan`.
-7. Revise as abas `Plan`, `Found`, `Not found` e `Heuristic`.
-8. Clique em `Create zips`.
+6. Em `Match`, escolha `Files`, `Folders` ou `Files and folders`.
+7. Clique em `Analyze plan`.
+8. Revise as abas `Plan`, `Found`, `Not found` e `Heuristic`.
+9. Clique em `Create zips`.
 
 Use o campo `Filter current result tab` para filtrar a aba aberta. Nas tabelas
 de resultado, clique com o botao direito para copiar a celula selecionada ou
@@ -248,6 +250,26 @@ complat `
   --names-file ".\names.txt" `
   --output-folder ".\zips" `
   --recursive
+```
+
+Buscar e compactar pastas pelo nome:
+
+```powershell
+complat `
+  --folder "C:\Files" `
+  --names-file ".\names.txt" `
+  --output-folder ".\zips" `
+  --match-type folders
+```
+
+Usar arquivos e pastas na mesma lista:
+
+```powershell
+complat `
+  --folder "C:\Files" `
+  --names-file ".\names.txt" `
+  --output-folder ".\zips" `
+  --match-type both
 ```
 
 ## Arquitetura

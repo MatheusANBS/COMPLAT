@@ -175,6 +175,46 @@ def test_local_file_finder_clear_cache_refreshes_folder_index(tmp_path: Path) ->
     assert [file.filename for file in result] == ["alpha.txt"]
 
 
+def test_local_file_finder_matches_folders_when_enabled(tmp_path: Path) -> None:
+    source = tmp_path / "source"
+    folder = source / "Cliente A"
+    source.mkdir()
+    folder.mkdir()
+    (folder / "contrato.pdf").write_bytes(b"contract")
+    finder = LocalFileFinder(scan_mode="folders")
+
+    result = finder.find(source, {"cliente a": "cliente a"})
+
+    assert len(result) == 1
+    assert result[0].filename == "Cliente A"
+    assert result[0].is_directory
+    assert result[0].size_bytes == len(b"contract")
+
+
+def test_create_zip_batches_can_zip_matched_folder_tree(tmp_path: Path) -> None:
+    source = tmp_path / "source"
+    output = tmp_path / "out"
+    folder = source / "Cliente A"
+    nested = folder / "documentos"
+    nested.mkdir(parents=True)
+    (folder / "contrato.pdf").write_bytes(b"contract")
+    (nested / "rg.txt").write_text("rg", encoding="utf-8")
+
+    use_case = _build_create_use_case(scan_mode="folders")
+    result = use_case.execute(
+        folder=source,
+        raw_names=["Cliente A"],
+        output_folder=output,
+        max_size_bytes=1024,
+    )
+
+    with ZipFile(result.archives[0].path) as archive:
+        names = set(archive.namelist())
+
+    assert "Cliente A/contrato.pdf" in names
+    assert "Cliente A/documentos/rg.txt" in names
+
+
 def test_create_zip_batches_stops_when_cancelled_before_creation(tmp_path: Path) -> None:
     source = tmp_path / "source"
     output = tmp_path / "out"
@@ -245,16 +285,16 @@ def test_fast_compression_stores_already_compressed_extensions(tmp_path: Path) -
     assert info.compress_type == ZIP_STORED
 
 
-def _build_compare_use_case() -> CompareNamesUseCase:
+def _build_compare_use_case(scan_mode: str = "files") -> CompareNamesUseCase:
     normalizer = NameNormalizer()
     matcher = FileNameMatcher(normalizer)
-    file_finder = LocalFileFinder()
+    file_finder = LocalFileFinder(scan_mode=scan_mode)
     return CompareNamesUseCase(file_finder, matcher, normalizer)
 
 
-def _build_analyze_use_case() -> AnalyzeZipPlanUseCase:
-    return AnalyzeZipPlanUseCase(_build_compare_use_case(), ZipPlanner())
+def _build_analyze_use_case(scan_mode: str = "files") -> AnalyzeZipPlanUseCase:
+    return AnalyzeZipPlanUseCase(_build_compare_use_case(scan_mode), ZipPlanner())
 
 
-def _build_create_use_case() -> CreateZipBatchesUseCase:
-    return CreateZipBatchesUseCase(_build_analyze_use_case(), ZipArchiveWriter())
+def _build_create_use_case(scan_mode: str = "files") -> CreateZipBatchesUseCase:
+    return CreateZipBatchesUseCase(_build_analyze_use_case(scan_mode), ZipArchiveWriter())
