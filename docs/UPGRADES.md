@@ -17,8 +17,8 @@ da mudanca, passos de implementacao e criterios de validacao.
 
 | Fase | Melhoria | Status | Observacao |
 | --- | --- | --- | --- |
-| 1 | Rodar a analise fora da thread da interface | Implementado e testado | `pytest`: 12 testes passaram. |
-| 2 | Trocar `QTableWidget` por modelos Qt | Implementado e testado | `compileall` passou; `pytest`: 12 testes passaram. |
+| 1 | Rodar a analise fora da thread da interface | Implementado e testado | Analise executa em worker dedicado. |
+| 2 | Trocar `QTableWidget` por modelos Qt | Implementado e testado | Tabelas usam model/proxy. |
 | 3 | Otimizar filtro das tabelas | Implementado e testado | Proxy usa texto pesquisavel em cache e filtro com debounce de 180 ms. |
 | 4 | Criar indice de pasta reutilizavel | Implementado e testado | Finder indexa nomes/stems da pasta e so calcula tamanho dos matches. |
 | 5 | Adicionar cancelamento de analise e criacao | Implementado e testado | Token compartilhado, botao `Cancel` e teste dedicado de cancelamento. |
@@ -28,6 +28,13 @@ da mudanca, passos de implementacao e criterios de validacao.
 | 9 | Reservar margem para overhead do ZIP | Implementado e testado | Planner reserva margem por lote e por arquivo antes de encaixar batches. |
 | 10 | Persistir preferencias do usuario | Implementado e testado | `QSettings` salva pastas, limite, recursivo, compressao, janela e splitter. |
 | 11 | Melhorar qualidade de desenvolvimento | Implementado e testado | Ruff configurado, instalado no extra `dev` e validado junto com testes. |
+
+Validacao atual do projeto:
+
+- `ruff check src tests`
+- `ruff format --check src tests`
+- `compileall src tests`
+- `pytest`
 
 ## 1. Rodar A Analise Fora Da Thread Da Interface
 

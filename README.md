@@ -8,14 +8,6 @@
   <strong>Aplicativo desktop para localizar arquivos por lista de nomes e gerar ZIPs separados por limite de tamanho.</strong>
 </p>
 
-<p align="center">
-  <img alt="Python" src="https://img.shields.io/badge/Python-3.11%2B-3776AB?style=flat-square&logo=python&logoColor=white">
-  <img alt="PySide6" src="https://img.shields.io/badge/UI-PySide6-41CD52?style=flat-square&logo=qt&logoColor=white">
-  <img alt="Windows" src="https://img.shields.io/badge/OS-Windows-0078D4?style=flat-square&logo=windows&logoColor=white">
-  <img alt="Architecture" src="https://img.shields.io/badge/Architecture-Clean%20Architecture-111827?style=flat-square">
-  <img alt="ZIP" src="https://img.shields.io/badge/Output-ZIP%20Parts-2563EB?style=flat-square">
-</p>
-
 COMPLAT e uma ferramenta local para analisar uma pasta, comparar arquivos ou
 pastas existentes com uma lista de pessoas/nomes e gerar multiplos arquivos `.zip`
 respeitando um limite configurado por parte. O caso principal e receber uma
@@ -50,6 +42,16 @@ visual de progresso.
 - Aba `Plan` mostra a divisao dos ZIPs antes de criar.
 - Aba `Heuristic` explica a estrategia aplicada.
 - Arquitetura organizada em camadas, seguindo Clean Architecture e SOLID.
+
+## Documentacao
+
+- [Arquitetura](ARCHITECTURE.md)
+- [Ambiente de desenvolvimento](SETUP_ENVIRONMENT.md)
+- [Guia de contribuicao](CONTRIBUTING.md)
+- [Codigo de conduta](CODE_OF_CONDUCT.md)
+- [Changelog](CHANGELOG.md)
+- [Plano de melhorias](docs/UPGRADES.md)
+- [Licenca](LICENSE)
 
 ## Como Funciona
 
@@ -399,3 +401,9 @@ Possiveis evolucoes:
 - Adicionar tela de historico de geracoes.
 - Criar instalador Windows.
 - Adicionar screenshots oficiais no README.
+
+Consulte tambem o [plano de melhorias](docs/UPGRADES.md) e o [changelog](CHANGELOG.md).
+
+## Licenca
+
+Este projeto esta licenciado sob os termos da [MIT License](LICENSE).
