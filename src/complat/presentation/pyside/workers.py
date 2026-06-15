@@ -9,7 +9,7 @@ from complat.presentation.pyside.controller import CompactFilesController, Timed
 
 
 class ZipCreationWorker(QObject):
-    progress = Signal(int, int, str)
+    progress = Signal(object, object, str)
     succeeded = Signal(object)
     failed = Signal(str)
     finished = Signal()

@@ -431,7 +431,9 @@ class MainWindow(QMainWindow):
             percent = int((completed / total) * 100)
             self.progress_bar.setValue(percent)
 
-        self.progress_label.setText(f"{completed}/{total}")
+        self.progress_label.setText(
+            f"{percent}% ({_format_bytes(completed)} / {_format_bytes(total)})"
+        )
         self.statusBar().showMessage(message)
         self._update_plan_status(completed, total, message)
 
@@ -443,10 +445,22 @@ class MainWindow(QMainWindow):
             number = self._part_number_from_message(message)
             if number is not None and 0 <= number - 1 < self.plan_table.rowCount():
                 self.plan_table.setItem(number - 1, 4, QTableWidgetItem("Created"))
+            return
+
+        if message.startswith("Writing part "):
+            number = self._part_number_from_writing_message(message)
+            if number is not None and 0 <= number - 1 < self.plan_table.rowCount():
+                self.plan_table.setItem(number - 1, 4, QTableWidgetItem("Writing"))
 
     def _part_number_from_message(self, message: str) -> int | None:
         try:
             return int(message.rsplit(" ", 1)[1])
+        except (IndexError, ValueError):
+            return None
+
+    def _part_number_from_writing_message(self, message: str) -> int | None:
+        try:
+            return int(message.split(":", 1)[0].rsplit(" ", 1)[1])
         except (IndexError, ValueError):
             return None
 
@@ -650,6 +664,7 @@ class MainWindow(QMainWindow):
             "- Only matched files are planned and zipped.",
             "- Zip parts are created on a worker thread so the UI stays responsive.",
             "- Independent zip parts are written in parallel with fast compression.",
+            "- Progress is reported by streamed bytes while each zip is being written.",
             "",
             "Verification",
             "- Planning uses source file sizes as a conservative estimate.",
@@ -810,7 +825,7 @@ class MainWindow(QMainWindow):
                 background: transparent;
                 color: #93c5fd;
                 font-weight: 700;
-                min-width: 64px;
+                min-width: 230px;
             }
             QLabel#copyFeedback {
                 background: #064e3b;

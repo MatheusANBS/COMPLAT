@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Protocol
+from typing import Callable, Protocol
 
 from complat.domain.entities import FileCandidate, ZipArchive, ZipBatch
 
@@ -21,5 +21,6 @@ class ArchiveWriter(Protocol):
         output_folder: Path,
         batch: ZipBatch,
         max_size_bytes: int,
+        progress_callback: Callable[[int, str], None] | None = None,
     ) -> ZipArchive:
         """Write one archive batch and return its final metadata."""

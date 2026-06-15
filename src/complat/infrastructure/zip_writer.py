@@ -1,12 +1,15 @@
 from __future__ import annotations
 
 from pathlib import Path
+from typing import Callable
 from zipfile import ZIP_DEFLATED, ZipFile
 
 from complat.domain.entities import FileCandidate, ZipArchive, ZipBatch
 
 
 class ZipArchiveWriter:
+    _CHUNK_SIZE = 1024 * 1024
+
     def __init__(self, compresslevel: int = 1) -> None:
         self._compresslevel = compresslevel
 
@@ -15,6 +18,7 @@ class ZipArchiveWriter:
         output_folder: Path,
         batch: ZipBatch,
         max_size_bytes: int,
+        progress_callback: Callable[[int, str], None] | None = None,
     ) -> ZipArchive:
         output_folder.mkdir(parents=True, exist_ok=True)
         output_path = output_folder / f"complat_part_{batch.number:03d}.zip"
@@ -26,7 +30,13 @@ class ZipArchiveWriter:
             compresslevel=self._compresslevel,
         ) as archive:
             for arcname, file in self._unique_archive_names(batch):
-                archive.write(file.path, arcname=arcname)
+                self._write_file(
+                    archive=archive,
+                    file=file,
+                    arcname=arcname,
+                    batch_number=batch.number,
+                    progress_callback=progress_callback,
+                )
 
         return ZipArchive(
             path=output_path,
@@ -35,6 +45,25 @@ class ZipArchiveWriter:
             estimated_size_bytes=batch.total_size_bytes,
             actual_size_bytes=output_path.stat().st_size,
         )
+
+    def _write_file(
+        self,
+        archive: ZipFile,
+        file: FileCandidate,
+        arcname: str,
+        batch_number: int,
+        progress_callback: Callable[[int, str], None] | None,
+    ) -> None:
+        message = f"Writing part {batch_number:03d}: {file.filename}"
+        with file.path.open("rb") as source, archive.open(arcname, "w") as target:
+            while True:
+                chunk = source.read(self._CHUNK_SIZE)
+                if not chunk:
+                    break
+
+                target.write(chunk)
+                if progress_callback:
+                    progress_callback(len(chunk), message)
 
     def _unique_archive_names(
         self,

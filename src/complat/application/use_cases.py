@@ -4,6 +4,7 @@ from dataclasses import dataclass
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from os import cpu_count
 from pathlib import Path
+from threading import Lock
 from typing import Callable
 
 from complat.application.errors import FileExceedsZipLimit
@@ -125,9 +126,21 @@ class CreateZipBatchesUseCase:
         worker_count = self._worker_count(total_batches)
         archives_by_number: dict[int, ZipArchive] = {}
         completed = 0
+        written_bytes = 0
+        total_bytes = max(1, analysis.total_size_bytes)
+        progress_lock = Lock()
 
         if progress_callback:
-            progress_callback(0, total_batches, f"Creating {total_batches} zip part(s)")
+            progress_callback(0, total_bytes, f"Creating {total_batches} zip part(s)")
+
+        def report_bytes(delta_bytes: int, message: str) -> None:
+            nonlocal written_bytes
+            if progress_callback is None:
+                return
+
+            with progress_lock:
+                written_bytes = min(total_bytes, written_bytes + delta_bytes)
+                progress_callback(written_bytes, total_bytes, message)
 
         with ThreadPoolExecutor(max_workers=worker_count) as executor:
             futures = {
@@ -136,6 +149,7 @@ class CreateZipBatchesUseCase:
                     output_folder,
                     batch,
                     analysis.plan.max_size_bytes,
+                    report_bytes,
                 ): batch
                 for batch in analysis.plan.batches
             }
@@ -155,8 +169,8 @@ class CreateZipBatchesUseCase:
                 completed += 1
                 if progress_callback:
                     progress_callback(
-                        completed,
-                        total_batches,
+                        written_bytes,
+                        total_bytes,
                         f"Created part {batch.number:03d}",
                     )
 

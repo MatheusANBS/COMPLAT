@@ -51,6 +51,34 @@ def test_create_zip_batches_returns_archives_in_plan_order(tmp_path: Path) -> No
     ]
 
 
+def test_create_zip_batches_reports_realtime_byte_progress(tmp_path: Path) -> None:
+    source = tmp_path / "source"
+    output = tmp_path / "out"
+    source.mkdir()
+    (source / "alpha.bin").write_bytes(b"x" * ((1024 * 1024 * 2) + 512))
+    events: list[tuple[int, int, str]] = []
+
+    use_case = _build_create_use_case()
+    use_case.execute(
+        folder=source,
+        raw_names=["alpha.bin"],
+        output_folder=output,
+        max_size_bytes=3 * 1024 * 1024,
+        progress_callback=lambda completed, total, message: events.append(
+            (completed, total, message)
+        ),
+    )
+
+    writing_events = [
+        event
+        for event in events
+        if event[2].startswith("Writing part 001:")
+    ]
+
+    assert len(writing_events) >= 2
+    assert writing_events[-1][0] == writing_events[-1][1]
+
+
 def test_create_zip_batches_rejects_single_file_over_limit(tmp_path: Path) -> None:
     source = tmp_path / "source"
     output = tmp_path / "out"

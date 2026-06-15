@@ -33,7 +33,7 @@ visual de progresso.
 - Icone e identidade visual embutidos no aplicativo.
 - Fluxo em duas etapas: `Analyze plan` e depois `Create zips`.
 - Criacao de ZIPs baseada no plano ja analisado em memoria.
-- Barra de progresso em tempo real durante a geracao.
+- Barra de progresso em tempo real por bytes escritos durante a geracao.
 - Geracao fora da thread principal da interface.
 - Escrita paralela de partes independentes com workers dinamicos por CPU.
 - Cache leve para reanalises da mesma pasta/lista.
@@ -73,7 +73,7 @@ flowchart TD
     Pool --> Writer["ZipArchiveWriter<br/>compresslevel=1"]
     Writer --> Verify["Verifica tamanho real"]
     Verify --> Output["complat_part_001.zip<br/>complat_part_002.zip"]
-    Worker --> Progress["Progresso em tempo real"]
+    Worker --> Progress["Progresso por bytes<br/>em tempo real"]
     Progress --> UI
 ```
 
