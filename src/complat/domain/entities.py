@@ -33,7 +33,7 @@ class MatchedFiles:
 
 @dataclass(frozen=True)
 class ZipPlan:
-    batches: tuple["ZipBatch", ...]
+    batches: tuple[ZipBatch, ...]
     max_size_bytes: int
     heuristic: str
 

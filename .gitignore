@@ -36,6 +36,8 @@ htmlcov/
 complat_output/
 *.zip
 ui-preview*.png
+.agents/
+skills-lock.json
 
 # Windows
 Thumbs.db

@@ -3,7 +3,7 @@ from __future__ import annotations
 import csv
 from pathlib import Path
 
-from PySide6.QtCore import QEasingCurve, QPropertyAnimation, QThread, Qt
+from PySide6.QtCore import QEasingCurve, QPropertyAnimation, QSettings, QThread, QTimer, Qt
 from PySide6.QtGui import QAction, QGuiApplication, QIcon, QPixmap
 from PySide6.QtWidgets import (
     QCheckBox,
@@ -23,9 +23,10 @@ from PySide6.QtWidgets import (
     QSizePolicy,
     QSpinBox,
     QSplitter,
-    QTableWidget,
-    QTableWidgetItem,
+    QAbstractItemView,
+    QTableView,
     QTabWidget,
+    QComboBox,
     QVBoxLayout,
     QWidget,
 )
@@ -36,7 +37,11 @@ from complat.domain.services import NameNormalizer
 from complat.presentation.assets import app_logo_path
 from complat.presentation.composition import build_services
 from complat.presentation.pyside.controller import CompactFilesController, TimedAnalysisResult
-from complat.presentation.pyside.workers import ZipCreationWorker
+from complat.presentation.pyside.table_models import (
+    ResultsFilterProxyModel,
+    ResultsTableModel,
+)
+from complat.presentation.pyside.workers import AnalysisWorker, ZipCreationWorker
 
 
 DEFAULT_LIMIT_MB = 9
@@ -53,10 +58,20 @@ class MainWindow(QMainWindow):
 
         self._controller = CompactFilesController(build_services())
         self._last_analysis: AnalysisResult | None = None
+        self._analysis_thread: QThread | None = None
+        self._analysis_worker: AnalysisWorker | None = None
         self._zip_thread: QThread | None = None
         self._zip_worker: ZipCreationWorker | None = None
         self._name_normalizer = NameNormalizer()
+        self._settings = QSettings()
         self._build_ui()
+        self._load_settings()
+        self._controller = CompactFilesController(
+            build_services(
+                recursive=self.recursive_input.isChecked(),
+                compression_mode=self._compression_mode(),
+            )
+        )
         self._connect_signals()
 
     def _build_ui(self) -> None:
@@ -75,6 +90,10 @@ class MainWindow(QMainWindow):
         self.max_size_input.setFixedWidth(120)
 
         self.recursive_input = QCheckBox("Include subfolders")
+        self.compression_input = QComboBox()
+        self.compression_input.addItem("Fast", "fast")
+        self.compression_input.addItem("Balanced", "balanced")
+        self.compression_input.addItem("Smaller", "smaller")
 
         self.names_input = QPlainTextEdit()
         self.names_input.setPlaceholderText("Paste one file/person name per line")
@@ -85,6 +104,9 @@ class MainWindow(QMainWindow):
         self.analyze_button = QPushButton("Analyze plan")
         self.create_button = QPushButton("Create zips")
         self.create_button.setEnabled(False)
+        self.cancel_button = QPushButton("Cancel")
+        self.cancel_button.setEnabled(False)
+        self.cancel_button.setVisible(False)
 
         self.requested_count_label = QLabel("Names 0")
         self.found_count_label = QLabel("Found 0")
@@ -112,15 +134,31 @@ class MainWindow(QMainWindow):
         self.progress_bar.setValue(0)
         self.progress_bar.setTextVisible(False)
 
-        self.plan_table = self._create_table(["Zip", "Files", "Estimated", "Actual", "Status"])
-        self.found_table = self._create_table(["Name", "File", "Size", "Path"])
-        self.missing_table = self._create_table(["Code", "Name"])
+        (
+            self.plan_table,
+            self.plan_model,
+            self.plan_proxy,
+        ) = self._create_table(["Zip", "Files", "Estimated", "Actual", "Status"])
+        (
+            self.found_table,
+            self.found_model,
+            self.found_proxy,
+        ) = self._create_table(["Name", "File", "Size", "Path"])
+        (
+            self.missing_table,
+            self.missing_model,
+            self.missing_proxy,
+        ) = self._create_table(["Code", "Name"])
         self.heuristic_output = QPlainTextEdit()
         self.heuristic_output.setReadOnly(True)
         self.filter_input = QLineEdit()
         self.filter_input.setPlaceholderText("Filter current result tab")
         self.filter_input.setClearButtonEnabled(True)
         self.filter_input.setObjectName("filterInput")
+        self._filter_timer = QTimer(self)
+        self._filter_timer.setInterval(180)
+        self._filter_timer.setSingleShot(True)
+        self._filter_timer.timeout.connect(self._apply_table_filter)
 
         root_layout = QVBoxLayout()
         root_layout.setContentsMargins(16, 16, 16, 12)
@@ -147,9 +185,7 @@ class MainWindow(QMainWindow):
         if logo_path:
             pixmap = QPixmap(str(logo_path))
             if not pixmap.isNull():
-                icon_label.setPixmap(
-                    pixmap.scaled(34, 34, Qt.KeepAspectRatio, Qt.SmoothTransformation)
-                )
+                icon_label.setPixmap(pixmap.scaled(34, 34, Qt.KeepAspectRatio, Qt.SmoothTransformation))
 
         title = QLabel("COMPLAT")
         title.setObjectName("appTitle")
@@ -191,6 +227,8 @@ class MainWindow(QMainWindow):
         form.addWidget(QLabel("Limit"), 2, 0)
         form.addWidget(self.max_size_input, 2, 1, alignment=Qt.AlignLeft)
         form.addWidget(self.recursive_input, 2, 2, alignment=Qt.AlignLeft)
+        form.addWidget(QLabel("Compression"), 3, 0)
+        form.addWidget(self.compression_input, 3, 1, alignment=Qt.AlignLeft)
 
         panel.setLayout(form)
         return panel
@@ -220,6 +258,7 @@ class MainWindow(QMainWindow):
         metrics.addWidget(self.progress_bar)
         metrics.addWidget(self.analyze_button)
         metrics.addWidget(self.create_button)
+        metrics.addWidget(self.cancel_button)
 
         panel.setLayout(metrics)
         return panel
@@ -264,14 +303,22 @@ class MainWindow(QMainWindow):
         splitter.setStretchFactor(0, 1)
         splitter.setStretchFactor(1, 4)
         splitter.setChildrenCollapsible(False)
+        self.workspace_splitter = splitter
         return splitter
 
-    def _create_table(self, headers: list[str]) -> QTableWidget:
-        table = QTableWidget(0, len(headers))
-        table.setHorizontalHeaderLabels(headers)
+    def _create_table(
+        self,
+        headers: list[str],
+    ) -> tuple[QTableView, ResultsTableModel, ResultsFilterProxyModel]:
+        model = ResultsTableModel(headers)
+        proxy = ResultsFilterProxyModel()
+        proxy.setSourceModel(model)
+
+        table = QTableView()
+        table.setModel(proxy)
         table.setAlternatingRowColors(True)
-        table.setEditTriggers(QTableWidget.NoEditTriggers)
-        table.setSelectionBehavior(QTableWidget.SelectRows)
+        table.setEditTriggers(QAbstractItemView.NoEditTriggers)
+        table.setSelectionBehavior(QAbstractItemView.SelectRows)
         table.setSortingEnabled(True)
         table.verticalHeader().setVisible(False)
         table.horizontalHeader().setStretchLastSection(True)
@@ -282,7 +329,7 @@ class MainWindow(QMainWindow):
             lambda position, current_table=table: self._show_table_menu(current_table, position)
         )
         table.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
-        return table
+        return table, model, proxy
 
     def _configure_table_columns(self) -> None:
         self.plan_table.setColumnWidth(0, 110)
@@ -304,13 +351,15 @@ class MainWindow(QMainWindow):
         self.clear_button.clicked.connect(self._clear)
         self.analyze_button.clicked.connect(self._analyze)
         self.create_button.clicked.connect(self._create_zips)
+        self.cancel_button.clicked.connect(self._cancel_current_operation)
         self.recursive_input.stateChanged.connect(self._rebuild_controller)
+        self.compression_input.currentTextChanged.connect(self._rebuild_controller_for_compression)
         self.names_input.textChanged.connect(self._update_requested_count)
         self.names_input.textChanged.connect(self._invalidate_analysis)
         self.source_input.textChanged.connect(self._invalidate_analysis)
         self.max_size_input.valueChanged.connect(self._invalidate_analysis)
-        self.missing_table.itemClicked.connect(self._copy_missing_name)
-        self.filter_input.textChanged.connect(self._apply_table_filter)
+        self.missing_table.clicked.connect(self._copy_missing_name)
+        self.filter_input.textChanged.connect(self._schedule_table_filter)
         self.result_tabs.currentChanged.connect(self._apply_table_filter)
 
     def _choose_source_folder(self) -> None:
@@ -344,23 +393,62 @@ class MainWindow(QMainWindow):
         if not self._validate_inputs(require_output=False):
             return
 
-        self._set_busy(True, "Analyzing plan...")
-        try:
-            result = self._controller.analyze(
-                folder=self._source_folder(),
-                raw_names=self._raw_names(),
-                max_size_mb=self.max_size_input.value(),
-            )
-        except Exception as error:
-            self._show_error(str(error))
+        if self._analysis_thread and self._analysis_thread.isRunning():
             return
-        finally:
-            self._set_busy(False)
 
+        self._last_analysis = None
+        self.create_button.setEnabled(False)
+        self._set_busy(True, "Analyzing plan...")
+        self.progress_label.setText("Analyzing")
+        self.progress_bar.setRange(0, 0)
+
+        self._analysis_thread = QThread(self)
+        self._analysis_worker = AnalysisWorker(
+            controller=self._controller,
+            folder=self._source_folder(),
+            raw_names=self._raw_names(),
+            max_size_mb=self.max_size_input.value(),
+        )
+        self._analysis_worker.moveToThread(self._analysis_thread)
+
+        self._analysis_thread.started.connect(self._analysis_worker.run)
+        self._analysis_worker.succeeded.connect(self._on_analysis_ready)
+        self._analysis_worker.failed.connect(self._on_analysis_failed)
+        self._analysis_worker.finished.connect(self._analysis_thread.quit)
+        self._analysis_worker.finished.connect(self._analysis_worker.deleteLater)
+        self._analysis_thread.finished.connect(self._analysis_thread.deleteLater)
+        self._analysis_thread.finished.connect(self._on_analysis_thread_finished)
+        self._analysis_thread.start()
+
+    def _on_analysis_ready(self, result: TimedAnalysisResult) -> None:
         self._last_analysis = result.analysis
         self._render_analysis(result)
         self.create_button.setEnabled(True)
+        self.progress_bar.setRange(0, 100)
+        self.progress_bar.setValue(100)
+        self.progress_label.setText("Plan ready")
         self.statusBar().showMessage("Plan ready")
+
+    def _on_analysis_failed(self, message: str) -> None:
+        self._last_analysis = None
+        self.create_button.setEnabled(False)
+        self.progress_bar.setRange(0, 100)
+        self.progress_bar.setValue(0)
+        if self._is_cancel_message(message):
+            self.progress_label.setText("Cancelled")
+            self.statusBar().showMessage("Analysis cancelled")
+            return
+
+        self.progress_label.setText("Failed")
+        self.statusBar().showMessage("Analysis failed")
+        self._show_error(message)
+
+    def _on_analysis_thread_finished(self) -> None:
+        self._analysis_thread = None
+        self._analysis_worker = None
+        self._set_busy(False)
+        if self._last_analysis is not None:
+            self.statusBar().showMessage("Plan ready")
 
     def _create_zips(self) -> None:
         if not self._validate_inputs(require_output=True):
@@ -377,6 +465,7 @@ class MainWindow(QMainWindow):
         self._mark_plan_pending()
 
         self._zip_thread = QThread(self)
+        self._rebuild_controller_for_compression()
         self._zip_worker = ZipCreationWorker(
             controller=self._controller,
             output_folder=self._output_folder(),
@@ -418,9 +507,9 @@ class MainWindow(QMainWindow):
         if self._last_analysis is None:
             return
 
-        for row in range(self.plan_table.rowCount()):
-            self.plan_table.setItem(row, 3, QTableWidgetItem("-"))
-            self.plan_table.setItem(row, 4, QTableWidgetItem("Queued"))
+        for row in range(self.plan_model.rowCount()):
+            self.plan_model.set_cell(row, 3, "-")
+            self.plan_model.set_cell(row, 4, "Queued")
 
     def _on_zip_progress(self, completed: int, total: int, message: str) -> None:
         if total <= 0:
@@ -431,26 +520,24 @@ class MainWindow(QMainWindow):
             percent = int((completed / total) * 100)
             self.progress_bar.setValue(percent)
 
-        self.progress_label.setText(
-            f"{percent}% ({_format_bytes(completed)} / {_format_bytes(total)})"
-        )
+        self.progress_label.setText(f"{percent}% ({_format_bytes(completed)} / {_format_bytes(total)})")
         self.statusBar().showMessage(message)
         self._update_plan_status(completed, total, message)
 
     def _update_plan_status(self, completed: int, total: int, message: str) -> None:
-        if total <= 0 or self.plan_table.rowCount() == 0:
+        if total <= 0 or self.plan_model.rowCount() == 0:
             return
 
         if message.startswith("Created part "):
             number = self._part_number_from_message(message)
-            if number is not None and 0 <= number - 1 < self.plan_table.rowCount():
-                self.plan_table.setItem(number - 1, 4, QTableWidgetItem("Created"))
+            if number is not None and 0 <= number - 1 < self.plan_model.rowCount():
+                self.plan_model.set_cell(number - 1, 4, "Created")
             return
 
         if message.startswith("Writing part "):
             number = self._part_number_from_writing_message(message)
-            if number is not None and 0 <= number - 1 < self.plan_table.rowCount():
-                self.plan_table.setItem(number - 1, 4, QTableWidgetItem("Writing"))
+            if number is not None and 0 <= number - 1 < self.plan_model.rowCount():
+                self.plan_model.set_cell(number - 1, 4, "Writing")
 
     def _part_number_from_message(self, message: str) -> int | None:
         try:
@@ -476,6 +563,11 @@ class MainWindow(QMainWindow):
     def _on_zip_failed(self, message: str) -> None:
         self.progress_bar.setRange(0, 100)
         self.progress_bar.setValue(0)
+        if self._is_cancel_message(message):
+            self.progress_label.setText("Cancelled")
+            self.statusBar().showMessage("Zip creation cancelled")
+            return
+
         self.progress_label.setText("Failed")
         self.statusBar().showMessage("Zip creation failed")
         self._show_error(message)
@@ -486,54 +578,41 @@ class MainWindow(QMainWindow):
         self._set_creating(False)
 
     def _render_plan(self, analysis: AnalysisResult, archives=()) -> None:
-        actual_by_number = {
-            index + 1: archive.actual_size_bytes
-            for index, archive in enumerate(archives)
-        }
-        self.plan_table.setSortingEnabled(False)
-        self.plan_table.setRowCount(len(analysis.plan.batches))
+        actual_by_number = {index + 1: archive.actual_size_bytes for index, archive in enumerate(archives)}
+        rows: list[tuple[str, ...]] = []
 
-        for row, batch in enumerate(analysis.plan.batches):
+        for batch in analysis.plan.batches:
             actual = actual_by_number.get(batch.number)
             status = "Ready" if actual is None else "Created"
-            values = [
-                f"part {batch.number:03d}",
-                str(batch.file_count),
-                _format_bytes(batch.total_size_bytes),
-                "-" if actual is None else _format_bytes(actual),
-                status,
-            ]
-            for column, value in enumerate(values):
-                self.plan_table.setItem(row, column, QTableWidgetItem(value))
+            rows.append(
+                (
+                    f"part {batch.number:03d}",
+                    str(batch.file_count),
+                    _format_bytes(batch.total_size_bytes),
+                    "-" if actual is None else _format_bytes(actual),
+                    status,
+                )
+            )
 
+        self.plan_model.replace_rows(rows)
         self.plan_table.horizontalHeader().setStretchLastSection(True)
-        self.plan_table.setSortingEnabled(True)
         self._apply_table_filter()
 
     def _render_found(self, matched: MatchedFiles) -> None:
-        self.found_table.setSortingEnabled(False)
-        self.found_table.setRowCount(len(matched.files))
+        rows = [(file.stem, file.filename, _format_bytes(file.size_bytes), str(file.path)) for file in matched.files]
 
-        for row, file in enumerate(matched.files):
-            values = [file.stem, file.filename, _format_bytes(file.size_bytes), str(file.path)]
-            for column, value in enumerate(values):
-                self.found_table.setItem(row, column, QTableWidgetItem(value))
-
+        self.found_model.replace_rows(rows)
         self.found_table.horizontalHeader().setStretchLastSection(True)
-        self.found_table.setSortingEnabled(True)
         self._apply_table_filter()
 
     def _render_missing(self, missing_names: tuple[str, ...]) -> None:
-        self.missing_table.setSortingEnabled(False)
-        self.missing_table.setRowCount(len(missing_names))
-
-        for row, name in enumerate(missing_names):
+        rows: list[tuple[str, ...]] = []
+        for name in missing_names:
             code, person_name = self._split_display_name(name)
-            self.missing_table.setItem(row, 0, QTableWidgetItem(code))
-            self.missing_table.setItem(row, 1, QTableWidgetItem(person_name))
+            rows.append((code, person_name))
 
+        self.missing_model.replace_rows(rows)
         self.missing_table.horizontalHeader().setStretchLastSection(True)
-        self.missing_table.setSortingEnabled(True)
         self._apply_table_filter()
 
     def _split_display_name(self, value: str) -> tuple[str, str]:
@@ -547,13 +626,13 @@ class MainWindow(QMainWindow):
 
         return parts[0], parts[1]
 
-    def _copy_missing_name(self, item: QTableWidgetItem) -> None:
-        value = item.text().strip()
+    def _copy_missing_name(self, index) -> None:
+        value = str(index.data() or "").strip()
         if not value:
             return
 
         QGuiApplication.clipboard().setText(value)
-        copied_kind = "code" if item.column() == 0 else "name"
+        copied_kind = "code" if index.column() == 0 else "name"
         self.copy_feedback_label.setText(f"✓ Copied {copied_kind}")
         self.copy_feedback_label.setVisible(True)
         self._copy_feedback_animation.stop()
@@ -566,31 +645,33 @@ class MainWindow(QMainWindow):
     def _hide_copy_feedback(self) -> None:
         self.copy_feedback_label.setVisible(False)
 
-    def _current_table(self) -> QTableWidget | None:
+    def _current_table(self) -> QTableView | None:
         widget = self.result_tabs.currentWidget()
-        if isinstance(widget, QTableWidget):
+        if isinstance(widget, QTableView):
             return widget
         return None
 
-    def _apply_table_filter(self, *_args) -> None:
+    def _current_proxy(self) -> ResultsFilterProxyModel | None:
         table = self._current_table()
         if table is None:
+            return None
+
+        model = table.model()
+        if isinstance(model, ResultsFilterProxyModel):
+            return model
+        return None
+
+    def _schedule_table_filter(self, *_args) -> None:
+        self._filter_timer.start()
+
+    def _apply_table_filter(self, *_args) -> None:
+        proxy = self._current_proxy()
+        if proxy is None:
             return
 
-        query = self.filter_input.text().strip().casefold()
-        for row in range(table.rowCount()):
-            if not query:
-                table.setRowHidden(row, False)
-                continue
+        proxy.set_query(self.filter_input.text())
 
-            row_text = " ".join(
-                table.item(row, column).text().casefold()
-                for column in range(table.columnCount())
-                if table.item(row, column) is not None
-            )
-            table.setRowHidden(row, query not in row_text)
-
-    def _show_table_menu(self, table: QTableWidget, position) -> None:
+    def _show_table_menu(self, table: QTableView, position) -> None:
         menu = QMenu(self)
         copy_action = QAction("Copy selected cell", self)
         export_action = QAction("Export visible rows to CSV", self)
@@ -600,12 +681,13 @@ class MainWindow(QMainWindow):
         menu.addAction(export_action)
         menu.exec(table.viewport().mapToGlobal(position))
 
-    def _copy_selected_cell(self, table: QTableWidget) -> None:
-        item = table.currentItem()
-        if item is None or not item.text().strip():
+    def _copy_selected_cell(self, table: QTableView) -> None:
+        index = table.currentIndex()
+        value = str(index.data() or "")
+        if not index.isValid() or not value.strip():
             return
 
-        QGuiApplication.clipboard().setText(item.text())
+        QGuiApplication.clipboard().setText(value)
         self.copy_feedback_label.setText("✓ Copied")
         self.copy_feedback_label.setVisible(True)
         self._copy_feedback_animation.stop()
@@ -614,7 +696,7 @@ class MainWindow(QMainWindow):
         self._copy_feedback_animation.setEndValue(0.0)
         self._copy_feedback_animation.start()
 
-    def _choose_table_export_path(self, table: QTableWidget) -> None:
+    def _choose_table_export_path(self, table: QTableView) -> None:
         path, _filter = QFileDialog.getSaveFileName(
             self,
             "Export visible rows",
@@ -627,25 +709,21 @@ class MainWindow(QMainWindow):
         self._export_table_csv(table, Path(path))
         self.statusBar().showMessage(f"Exported: {path}")
 
-    def _export_table_csv(self, table: QTableWidget, path: Path) -> None:
-        headers = [
-            table.horizontalHeaderItem(column).text()
-            for column in range(table.columnCount())
-        ]
+    def _export_table_csv(self, table: QTableView, path: Path) -> None:
+        proxy = table.model()
+        if not isinstance(proxy, ResultsFilterProxyModel):
+            return
+
+        source = proxy.sourceModel()
+        if not isinstance(source, ResultsTableModel):
+            return
+
+        headers = list(source.headers())
         with path.open("w", newline="", encoding="utf-8-sig") as file:
             writer = csv.writer(file)
             writer.writerow(headers)
-            for row in range(table.rowCount()):
-                if table.isRowHidden(row):
-                    continue
-                writer.writerow(
-                    [
-                        table.item(row, column).text()
-                        if table.item(row, column) is not None
-                        else ""
-                        for column in range(table.columnCount())
-                    ]
-                )
+            for row in range(proxy.rowCount()):
+                writer.writerow([str(proxy.index(row, column).data() or "") for column in range(proxy.columnCount())])
 
     def _render_heuristic(
         self,
@@ -684,9 +762,26 @@ class MainWindow(QMainWindow):
         self.heuristic_output.setPlainText("\n".join(lines))
 
     def _clear_tables(self) -> None:
-        self.plan_table.setRowCount(0)
-        self.found_table.setRowCount(0)
-        self.missing_table.setRowCount(0)
+        self.plan_model.clear()
+        self.found_model.clear()
+        self.missing_model.clear()
+
+    def _cancel_current_operation(self) -> None:
+        if self._analysis_worker is not None:
+            self._analysis_worker.cancel()
+            self.statusBar().showMessage("Cancelling analysis...")
+            self.progress_label.setText("Cancelling")
+            self.cancel_button.setEnabled(False)
+            return
+
+        if self._zip_worker is not None:
+            self._zip_worker.cancel()
+            self.statusBar().showMessage("Cancelling zip creation...")
+            self.progress_label.setText("Cancelling")
+            self.cancel_button.setEnabled(False)
+
+    def _is_cancel_message(self, message: str) -> bool:
+        return "cancel" in message.casefold()
 
     def _set_summary(
         self,
@@ -735,10 +830,21 @@ class MainWindow(QMainWindow):
         return True
 
     def _rebuild_controller(self) -> None:
-        services = build_services(recursive=self.recursive_input.isChecked())
+        services = build_services(
+            recursive=self.recursive_input.isChecked(),
+            compression_mode=self._compression_mode(),
+        )
         self._controller = CompactFilesController(services)
         self._invalidate_analysis()
         self.statusBar().showMessage("Search mode updated")
+
+    def _rebuild_controller_for_compression(self, *_args) -> None:
+        services = build_services(
+            recursive=self.recursive_input.isChecked(),
+            compression_mode=self._compression_mode(),
+        )
+        self._controller = CompactFilesController(services)
+        self.statusBar().showMessage("Compression mode updated")
 
     def _source_folder(self) -> Path:
         return Path(self.source_input.text().strip())
@@ -747,15 +853,48 @@ class MainWindow(QMainWindow):
         return Path(self.output_input.text().strip())
 
     def _raw_names(self) -> list[str]:
-        return [
-            line.strip()
-            for line in self.names_input.toPlainText().splitlines()
-            if line.strip()
-        ]
+        return [line.strip() for line in self.names_input.toPlainText().splitlines() if line.strip()]
+
+    def _compression_mode(self) -> str:
+        return str(self.compression_input.currentData() or "fast")
+
+    def _load_settings(self) -> None:
+        self.source_input.setText(str(self._settings.value("paths/source", "")))
+        self.output_input.setText(str(self._settings.value("paths/output", "")))
+        self.max_size_input.setValue(int(self._settings.value("zip/max_size_mb", DEFAULT_LIMIT_MB)))
+        self.recursive_input.setChecked(bool(self._settings.value("search/recursive", False, type=bool)))
+
+        compression_mode = str(self._settings.value("zip/compression", "fast"))
+        compression_index = self.compression_input.findData(compression_mode)
+        if compression_index >= 0:
+            self.compression_input.setCurrentIndex(compression_index)
+
+        geometry = self._settings.value("window/geometry")
+        if geometry:
+            self.restoreGeometry(geometry)
+
+        splitter_state = self._settings.value("window/splitter")
+        if splitter_state:
+            self.workspace_splitter.restoreState(splitter_state)
+
+    def _save_settings(self) -> None:
+        self._settings.setValue("paths/source", self.source_input.text().strip())
+        self._settings.setValue("paths/output", self.output_input.text().strip())
+        self._settings.setValue("zip/max_size_mb", self.max_size_input.value())
+        self._settings.setValue("zip/compression", self._compression_mode())
+        self._settings.setValue("search/recursive", self.recursive_input.isChecked())
+        self._settings.setValue("window/geometry", self.saveGeometry())
+        self._settings.setValue("window/splitter", self.workspace_splitter.saveState())
+
+    def closeEvent(self, event) -> None:
+        self._save_settings()
+        super().closeEvent(event)
 
     def _set_busy(self, busy: bool, message: str = "") -> None:
         self.analyze_button.setEnabled(not busy)
         self.create_button.setEnabled(not busy and self._last_analysis is not None)
+        self.cancel_button.setVisible(busy)
+        self.cancel_button.setEnabled(busy)
         self.statusBar().showMessage(message if busy else "Ready")
         if busy:
             QGuiApplication.setOverrideCursor(Qt.WaitCursor)
@@ -765,11 +904,14 @@ class MainWindow(QMainWindow):
     def _set_creating(self, creating: bool) -> None:
         self.analyze_button.setEnabled(not creating)
         self.create_button.setEnabled(not creating)
+        self.cancel_button.setVisible(creating)
+        self.cancel_button.setEnabled(creating)
         self.source_button.setEnabled(not creating)
         self.output_button.setEnabled(not creating)
         self.names_input.setEnabled(not creating)
         self.max_size_input.setEnabled(not creating)
         self.recursive_input.setEnabled(not creating)
+        self.compression_input.setEnabled(not creating)
         if creating:
             self.progress_bar.setValue(0)
             self.progress_label.setText("Starting")
@@ -852,7 +994,7 @@ class MainWindow(QMainWindow):
                 );
                 border-radius: 5px;
             }
-            QLineEdit, QPlainTextEdit, QSpinBox, QTableWidget {
+            QLineEdit, QPlainTextEdit, QSpinBox, QComboBox, QTableView {
                 background: #0b1220;
                 border: 1px solid #334155;
                 border-radius: 6px;
@@ -861,7 +1003,7 @@ class MainWindow(QMainWindow):
                 selection-background-color: #2563eb;
                 selection-color: #ffffff;
             }
-            QLineEdit:focus, QPlainTextEdit:focus, QSpinBox:focus, QTableWidget:focus {
+            QLineEdit:focus, QPlainTextEdit:focus, QSpinBox:focus, QComboBox:focus, QTableView:focus {
                 border: 1px solid #3b82f6;
             }
             QLineEdit#filterInput {
@@ -903,17 +1045,17 @@ class MainWindow(QMainWindow):
                 color: #f8fafc;
                 border-bottom-color: #1e293b;
             }
-            QTableWidget {
+            QTableView {
                 gridline-color: #253044;
                 alternate-background-color: #101a2e;
             }
-            QTableWidget::item {
+            QTableView::item {
                 padding: 4px;
             }
-            QTableWidget::item:hover {
+            QTableView::item:hover {
                 background: #172554;
             }
-            QTableWidget::item:selected {
+            QTableView::item:selected {
                 background: #1d4ed8;
                 color: #ffffff;
             }

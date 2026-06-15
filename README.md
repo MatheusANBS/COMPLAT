@@ -303,6 +303,13 @@ Rode os testes:
 .venv\Scripts\python.exe -m pytest
 ```
 
+Verifique lint e formatacao:
+
+```powershell
+.venv\Scripts\python.exe -m ruff check src tests
+.venv\Scripts\python.exe -m ruff format src tests
+```
+
 Verifique a CLI:
 
 ```powershell

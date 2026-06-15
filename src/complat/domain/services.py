@@ -1,8 +1,14 @@
 from __future__ import annotations
 
 from bisect import bisect_left, insort
+from typing import Protocol
 
 from .entities import FileCandidate, MatchedFiles, RequestedName, ZipBatch, ZipPlan
+
+
+class CancellationToken(Protocol):
+    def raise_if_cancelled(self) -> None:
+        """Raise when the current operation should stop."""
 
 
 class NameNormalizer:
@@ -100,10 +106,14 @@ class FileNameMatcher:
 
 
 class ZipPlanner:
+    _ZIP_BATCH_OVERHEAD_BYTES = 256
+    _ZIP_FILE_OVERHEAD_BYTES = 128
+
     def plan(
         self,
         files: tuple[FileCandidate, ...],
         max_size_bytes: int,
+        cancellation_token: CancellationToken | None = None,
     ) -> ZipPlan:
         if max_size_bytes <= 0:
             raise ValueError("Max size must be greater than zero.")
@@ -112,28 +122,37 @@ class ZipPlanner:
         batches: list[list[FileCandidate]] = []
         batch_sizes: list[int] = []
         remaining_by_batch: list[tuple[int, int]] = []
+        effective_max_size_bytes = max(1, max_size_bytes - self._ZIP_BATCH_OVERHEAD_BYTES)
 
         for file in sorted_files:
-            if file.size_bytes > max_size_bytes:
+            if cancellation_token:
+                cancellation_token.raise_if_cancelled()
+
+            planned_file_size = file.size_bytes + self._ZIP_FILE_OVERHEAD_BYTES
+
+            if planned_file_size > effective_max_size_bytes:
                 batches.append([file])
                 batch_sizes.append(file.size_bytes)
                 continue
 
-            position = bisect_left(remaining_by_batch, (file.size_bytes, -1))
+            position = bisect_left(remaining_by_batch, (planned_file_size, -1))
 
             if position == len(remaining_by_batch):
                 batches.append([file])
                 batch_sizes.append(file.size_bytes)
                 insort(
                     remaining_by_batch,
-                    (max_size_bytes - file.size_bytes, len(batches) - 1),
+                    (
+                        effective_max_size_bytes - planned_file_size,
+                        len(batches) - 1,
+                    ),
                 )
                 continue
 
             remaining, batch_index = remaining_by_batch.pop(position)
             batches[batch_index].append(file)
             batch_sizes[batch_index] += file.size_bytes
-            insort(remaining_by_batch, (remaining - file.size_bytes, batch_index))
+            insort(remaining_by_batch, (remaining - planned_file_size, batch_index))
 
         zip_batches = tuple(
             ZipBatch(
@@ -150,6 +169,8 @@ class ZipPlanner:
             heuristic=(
                 "Best-fit decreasing by source size with an ordered remaining-space "
                 "index. Files are sorted largest first and each file is placed in "
-                "the tightest batch that still fits without scanning every batch."
+                "the tightest batch that still fits without scanning every batch. "
+                "The planner also reserves a small safety margin for zip metadata "
+                "per batch and per file."
             ),
         )

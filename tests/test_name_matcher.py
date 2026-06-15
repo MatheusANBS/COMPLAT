@@ -37,9 +37,7 @@ def test_normalizer_removes_blank_and_duplicate_names() -> None:
 def test_normalizer_parses_number_and_name_line() -> None:
     normalizer = NameNormalizer()
 
-    result = normalizer.parse_requested_name(
-        "45119983\tRICARDO DOS SANTOS GUIMARAES"
-    )
+    result = normalizer.parse_requested_name("45119983\tRICARDO DOS SANTOS GUIMARAES")
 
     assert result.lookup_name == "RICARDO DOS SANTOS GUIMARAES"
     assert result.display_name == "45119983\tRICARDO DOS SANTOS GUIMARAES"

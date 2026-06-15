@@ -9,7 +9,7 @@ from complat.application.use_cases import (
 )
 from complat.domain.services import FileNameMatcher, NameNormalizer, ZipPlanner
 from complat.infrastructure.filesystem import LocalFileFinder
-from complat.infrastructure.zip_writer import ZipArchiveWriter
+from complat.infrastructure.zip_writer import CompressionMode, ZipArchiveWriter
 
 
 @dataclass(frozen=True)
@@ -19,7 +19,10 @@ class ApplicationServices:
     create_zip_batches: CreateZipBatchesUseCase
 
 
-def build_services(recursive: bool = False) -> ApplicationServices:
+def build_services(
+    recursive: bool = False,
+    compression_mode: CompressionMode | str = "fast",
+) -> ApplicationServices:
     file_finder = LocalFileFinder(recursive=recursive)
     normalizer = NameNormalizer()
     matcher = FileNameMatcher(normalizer)
@@ -31,7 +34,7 @@ def build_services(recursive: bool = False) -> ApplicationServices:
         analyze_zip_plan=analyze_zip_plan,
         create_zip_batches=CreateZipBatchesUseCase(
             analyze_zip_plan,
-            ZipArchiveWriter(),
+            ZipArchiveWriter(compression_mode=compression_mode),
             max_workers=None,
         ),
     )

@@ -26,6 +26,8 @@ def main() -> None:
 
 
 def _configure_application(app: QApplication) -> None:
+    app.setOrganizationName("COMPLAT")
+    app.setApplicationName("COMPLAT")
     app.setStyle("Fusion")
     app.setFont(QFont("Segoe UI", 10))
 

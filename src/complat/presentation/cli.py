@@ -17,7 +17,10 @@ def main() -> None:
     output_folder = args.output_folder or args.folder / "complat_output"
     raw_names = _read_names(args)
     max_size_bytes = args.max_mb * 1024 * 1024
-    services = build_services(recursive=args.recursive)
+    services = build_services(
+        recursive=args.recursive,
+        compression_mode=args.compression,
+    )
 
     try:
         if args.analyze_only:
@@ -45,9 +48,7 @@ def main() -> None:
 
 
 def _parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(
-        description="Split named files from a folder into size-limited zip parts."
-    )
+    parser = argparse.ArgumentParser(description="Split named files from a folder into size-limited zip parts.")
     parser.add_argument("--folder", type=Path, help="Folder to scan.")
     parser.add_argument("--names-file", type=Path, help="Text file with one name per line.")
     parser.add_argument("--output-folder", type=Path, help="Destination folder for zip parts.")
@@ -57,6 +58,12 @@ def _parse_args() -> argparse.Namespace:
         "--recursive",
         action="store_true",
         help="Scan subfolders too.",
+    )
+    parser.add_argument(
+        "--compression",
+        choices=("fast", "balanced", "smaller"),
+        default="fast",
+        help="Compression mode used when creating zip parts.",
     )
 
     return parser.parse_args()
@@ -84,8 +91,7 @@ def _print_analysis(analysis) -> None:
     print("Plan:")
     for batch in analysis.plan.batches:
         print(
-            f"- part {batch.number:03d}: "
-            f"{batch.file_count} file(s), {_format_bytes(batch.total_size_bytes)} estimated"
+            f"- part {batch.number:03d}: {batch.file_count} file(s), {_format_bytes(batch.total_size_bytes)} estimated"
         )
 
 
